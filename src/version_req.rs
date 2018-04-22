@@ -306,6 +306,38 @@ impl VersionReq {
                 |p| p.pre_tag_is_compatible(version),
             )
     }
+
+    /// 'is_semver_open()` inspect the precise form of VersionReq.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use semver::VersionReq;
+    ///
+    /// let version1 = VersionReq::parse("1.2.3").unwrap();
+    /// let version2 = VersionReq::parse(">1.2.3").unwrap();
+    ///
+    /// assert!(version1.is_semver_open());
+    /// assert!(!version2.is_semver_open());
+    /// ```
+    pub fn is_semver_open(&self) -> bool {
+        if self.predicates.is_empty() {
+            return true;
+        }
+
+        self.predicates.iter().all(|p| {
+            match p.op {
+                Ex |
+                Lt |
+                LtEq |
+                Gt |
+                GtEq |
+                Tilde |
+                Wildcard(_) => false,
+                Compatible => true,
+            }
+        })
+    }
 }
 
 impl str::FromStr for VersionReq {
@@ -962,5 +994,14 @@ mod test {
         assert!(req("~1") < req("*"));
         assert!(req("^1") < req("*"));
         assert!(req("*") == req("*"));
+    }
+
+    #[test]
+    fn test_is_semver_open() {
+        assert!(!req("=1").is_semver_open());
+        assert!(!req(">=1").is_semver_open());
+        assert!(!req("<1").is_semver_open());
+        assert!(!req("<=1").is_semver_open());
+        assert!(!req("*").is_semver_open());
     }
 }
