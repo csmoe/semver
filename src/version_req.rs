@@ -86,6 +86,12 @@ enum WildcardVersion {
 }
 
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+enum CompatibleOp {
+    Caret,
+    Default_,
+}
+
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 enum Op {
     Ex, // Exact
     Gt, // Greater than
@@ -93,7 +99,7 @@ enum Op {
     Lt, // Less than
     LtEq, // Less than or equal to
     Tilde, // e.g. ~1.0.0
-    Compatible, // compatible by definition of semver, indicated by ^
+    Compatible(CompatibleOp), // compatible by definition of semver, indicated by ^
     Wildcard(WildcardVersion), // x.y.*, x.*, *
 }
 
@@ -107,7 +113,12 @@ impl From<semver_parser::range::Op> for Op {
             range::Op::Lt => Op::Lt,
             range::Op::LtEq => Op::LtEq,
             range::Op::Tilde => Op::Tilde,
-            range::Op::Compatible => Op::Compatible,
+            range::Op::Compatible(op) => {
+                match op {
+                    range::CompatibleOp::Caret => Op::Compatible(CompatibleOp::Caret),
+                    range::CompatibleOp::Default_ => Op::Compatible(CompatibleOp::Default_),
+                }
+            },
             range::Op::Wildcard(version) => {
                 match version {
                     range::WildcardVersion::Major => Op::Wildcard(WildcardVersion::Major),
@@ -320,8 +331,8 @@ impl VersionReq {
     /// assert!(version1.is_semver_open());
     /// assert!(!version2.is_semver_open());
     /// ```
-    pub fn is_semver_open(&self) -> bool {
-        if self.predicates.is_empty() {
+    pub fn is_plain_semver(&self) -> bool {
+        if self.predicates.len() == 1 {
             return true;
         }
 
@@ -334,7 +345,12 @@ impl VersionReq {
                 GtEq |
                 Tilde |
                 Wildcard(_) => false,
-                Compatible => true,
+                Compatible(ref op) => {
+                    match *op {
+                        CompatibleOp::Caret => false,
+                        CompatibleOp::Default_ => true,
+                    }
+                },
             }
         })
     }
@@ -368,7 +384,7 @@ impl Predicate {
             Lt => !self.is_exact(ver) && !self.is_greater(ver),
             LtEq => !self.is_greater(ver),
             Tilde => self.matches_tilde(ver),
-            Compatible => self.is_compatible(ver),
+            Compatible(_) => self.is_compatible(ver),
             Wildcard(_) => self.matches_wildcard(ver),
         }
     }
@@ -590,7 +606,10 @@ impl fmt::Display for Op {
             Lt => try!(write!(fmt, "< ")),
             LtEq => try!(write!(fmt, "<= ")),
             Tilde => try!(write!(fmt, "~")),
-            Compatible => try!(write!(fmt, "^")),
+            Compatible(ref op) => match *op {
+                CompatibleOp::Caret => try!(write!(fmt, "^")),
+                CompatibleOp::Default_ => try!(write!(fmt, "")),
+            }
             // gets handled specially in Predicate::fmt
             Wildcard(_) => try!(write!(fmt, "")),
         }
@@ -673,7 +692,7 @@ mod test {
     #[test]
     fn test_parse_metadata_see_issue_88_see_issue_88() {
         for op in &[
-            Op::Compatible,
+            Op::Compatible(..),
             Op::Ex,
             Op::Gt,
             Op::GtEq,
@@ -998,10 +1017,10 @@ mod test {
 
     #[test]
     fn test_is_semver_open() {
-        assert!(!req("=1").is_semver_open());
-        assert!(!req(">=1").is_semver_open());
-        assert!(!req("<1").is_semver_open());
-        assert!(!req("<=1").is_semver_open());
-        assert!(!req("*").is_semver_open());
+        assert!(!req("=1").is_plain_semver());
+        assert!(!req(">=1").is_plain_open());
+        assert!(!req("<1").is_plain_open());
+        assert!(!req("<=1").is_plain_open());
+        assert!(!req("*").is_plain_open());
     }
 }

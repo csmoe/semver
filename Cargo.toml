@@ -16,7 +16,7 @@ readme = "README.md"
 travis-ci = { repository = "steveklabnik/semver" }
 
 [dependencies]
-semver-parser = "0.7.0"
+semver-parser = { git = "https://github.com/csmoe/semver-parser", verison = "0.7.0", branch = "op" }
 serde = { version = "1.0", optional = true }
 
 [features]
