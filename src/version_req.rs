@@ -84,6 +84,20 @@ enum WildcardVersion {
     Patch,
 }
 
+#[derive(Clone, PartialOrd, Ord, Hash, Debug)]
+enum CompatibleOp {
+    Caret,
+    Default_,
+}
+
+impl PartialEq for CompatibleOp {
+    fn eq(&self, _other: &CompatibleOp) -> bool {
+        true
+    }
+}
+
+impl Eq for CompatibleOp {}
+
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 enum Op {
     Ex, // Exact
@@ -92,7 +106,7 @@ enum Op {
     Lt, // Less than
     LtEq, // Less than or equal to
     Tilde, // e.g. ~1.0.0
-    Compatible, // compatible by definition of semver, indicated by ^
+    Compatible(CompatibleOp), // compatible by definition of semver, indicated by ^
     Wildcard(WildcardVersion), // x.y.*, x.*, *
 }
 
@@ -106,7 +120,10 @@ impl From<semver_parser::range::Op> for Op {
             range::Op::Lt => Op::Lt,
             range::Op::LtEq => Op::LtEq,
             range::Op::Tilde => Op::Tilde,
-            range::Op::Compatible => Op::Compatible,
+            range::Op::Compatible(op) => match op {
+                range::CompatibleOp::Caret => Op::Compatible(CompatibleOp::Caret),
+                range::CompatibleOp::Default_ => Op::Compatible(CompatibleOp::Default_),
+            }
             range::Op::Wildcard(version) => {
                 match version {
                     range::WildcardVersion::Minor => Op::Wildcard(WildcardVersion::Minor),
@@ -304,6 +321,21 @@ impl VersionReq {
                 |p| p.pre_tag_is_compatible(version),
             )
     }
+
+    /// check if version_req is semver open
+    pub fn is_plain_semver(&self) -> bool {
+        self.predicates.iter().all(|p| {
+            match p.op {
+                    Op::Compatible(ref op) => {
+                        match *op {
+                            CompatibleOp::Caret => false,
+                            CompatibleOp::Default_ => true,
+                        }
+                    }
+                    _ => false,
+            }
+        })
+    }
 }
 
 impl str::FromStr for VersionReq {
@@ -334,7 +366,7 @@ impl Predicate {
             Lt => !self.is_exact(ver) && !self.is_greater(ver),
             LtEq => !self.is_greater(ver),
             Tilde => self.matches_tilde(ver),
-            Compatible => self.is_compatible(ver),
+            Compatible(_) => self.is_compatible(ver),
             Wildcard(_) => self.matches_wildcard(ver),
         }
     }
@@ -545,6 +577,17 @@ impl fmt::Display for Predicate {
     }
 }
 
+impl fmt::Display for CompatibleOp {
+    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+        match *self {
+            CompatibleOp::Caret => try!(write!(fmt, "^")),
+            CompatibleOp::Default_ => try!(write!(fmt, "")),
+        }
+
+        Ok(())
+    }
+}
+
 impl fmt::Display for Op {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
         match *self {
@@ -554,7 +597,10 @@ impl fmt::Display for Op {
             Lt => try!(write!(fmt, "< ")),
             LtEq => try!(write!(fmt, "<= ")),
             Tilde => try!(write!(fmt, "~")),
-            Compatible => try!(write!(fmt, "^")),
+            Compatible(ref op) => match *op {
+                CompatibleOp::Caret => try!(write!(fmt, "^")),
+                CompatibleOp::Default_ => try!(write!(fmt, "")),
+            }
             // gets handled specially in Predicate::fmt
             Wildcard(_) => try!(write!(fmt, "")),
         }
@@ -564,7 +610,7 @@ impl fmt::Display for Op {
 
 #[cfg(test)]
 mod test {
-    use super::{VersionReq, Op};
+    use super::{VersionReq, CompatibleOp, Op};
     use super::super::version::Version;
     use std::hash::{Hash, Hasher};
 
@@ -603,7 +649,7 @@ mod test {
     fn test_parsing_default() {
         let r = req("1.0.0");
 
-        assert_eq!(r.to_string(), "^1.0.0".to_string());
+        assert_eq!(r, "^1.0.0".parse::<VersionReq>().unwrap());
 
         assert_match(&r, &["1.0.0", "1.0.1"]);
         assert_not_match(&r, &["0.9.9", "0.10.0", "0.1.0"]);
@@ -637,7 +683,7 @@ mod test {
     #[test]
     fn test_parse_metadata_see_issue_88_see_issue_88() {
         for op in &[
-            Op::Compatible,
+            Op::Compatible(CompatibleOp::Caret),
             Op::Ex,
             Op::Gt,
             Op::GtEq,
@@ -694,7 +740,7 @@ mod test {
         assert_not_match(&r, &["0.0.8", "2.5.4"]);
 
         let r = req("0.3.0, 0.4.0");
-        assert_eq!(r.to_string(), "^0.3.0, ^0.4.0".to_string());
+        assert_eq!(r, req("^0.3.0, ^0.4.0"));
         assert_not_match(&r, &["0.0.8", "0.3.0", "0.4.0"]);
 
         let r = req("<= 0.2.0, >= 0.5.0");
@@ -702,7 +748,7 @@ mod test {
         assert_not_match(&r, &["0.0.8", "0.3.0", "0.5.1"]);
 
         let r = req("0.1.0, 0.1.4, 0.1.6");
-        assert_eq!(r.to_string(), "^0.1.0, ^0.1.4, ^0.1.6".to_string());
+        assert_eq!(r, req("^0.1.0, ^0.1.4, ^0.1.6"));
         assert_match(&r, &["0.1.6", "0.1.9"]);
         assert_not_match(&r, &["0.1.0", "0.1.4", "0.2.0"]);
 
@@ -881,8 +927,8 @@ mod test {
     #[test]
     pub fn test_from_str() {
         assert_eq!(
-            "1.0.0".parse::<VersionReq>().unwrap().to_string(),
-            "^1.0.0".to_string()
+            "1.0.0".parse::<VersionReq>(),
+            "^1.0.0".parse::<VersionReq>(),
         );
         assert_eq!(
             "=1.0.0".parse::<VersionReq>().unwrap().to_string(),
@@ -947,4 +993,13 @@ mod test {
         assert!(calculate_hash(req("^1")) == calculate_hash(req("^1")));
         assert!(req("^1") != req("^2"));
     }
+
+     #[test]
+     fn test_is_plain_semver() {
+         assert!(!req("=1").is_plain_semver());
+         assert!(!req(">=1").is_plain_semver());
+         assert!(!req("<1").is_plain_semver());
+         assert!(!req("<=1").is_plain_semver());
+         assert!(!req("^1").is_plain_semver());
+     }
 }
